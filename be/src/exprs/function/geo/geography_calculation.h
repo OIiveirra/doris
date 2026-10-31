@@ -34,6 +34,7 @@ Status geography_relation(std::string_view name, const GeoShape& lhs, const GeoS
 bool geography_bearing(StringRef from, StringRef to, double* bearing);
 double geography_distance(const GeoShape& left_shape, const GeoShape& right_shape,
                           StringRef left_wkb, StringRef right_wkb);
+double geography_length(StringRef wkb);
 double geography_area(const GeoShape& shape, StringRef wkb, bool square_meters);
 #ifdef BE_TEST
 std::array<double, 6> geography_portable_arc_for_test(double ax, double ay, double bx, double by);

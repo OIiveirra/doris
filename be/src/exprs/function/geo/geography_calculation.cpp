@@ -1247,6 +1247,26 @@ static GeographyPolygonInterior geography_polygon_point_interior(
     return interior ? GeographyPolygonInterior::INSIDE : GeographyPolygonInterior::OUTSIDE;
 }
 
+static bool geography_polygon_has_rounded_side_mismatch(
+        const GeographyCoordinates& polygon, const S2ShapeIndex& polygon_index,
+        const GeographyCoordinates& other, const GeographyEdgeNodes& nodes) {
+    for (const auto& sequence : other.sequences) {
+        for (const auto& point : sequence) {
+            // A raw boundary vertex is an actual contact, even if S2 rounds it onto a
+            // neighboring edge. The existing raw edge checks own that case.
+            if (geography_polygon_boundary_contains_point(polygon, nodes, point)) {
+                continue;
+            }
+            const auto location = geography_polygon_point_interior(polygon, polygon_index, point);
+            if (location == GeographyPolygonInterior::ROUNDED_BOUNDARY ||
+                location == GeographyPolygonInterior::ROUNDED_SIDE) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 static bool geography_has_polygon_intersection_witness(const GeographyCoordinates& polygon,
                                                        const S2ShapeIndex& index,
                                                        const GeographyCoordinates& other,
@@ -1376,6 +1396,34 @@ static Status geography_relation_impl(std::string_view name, const GeoShape& lhs
                           raw_coverage ? &left_edges : nullptr);
     geography_shape_index(value, name == "st_within" ? nodes.left : nodes.right, nodes, &right,
                           raw_coverage ? &right_edges : nullptr);
+    const auto check_polygon_admission = [&](const GeographyCoordinates& polygon_raw,
+                                             const S2ShapeIndex& polygon_index,
+                                             const GeoShape& other,
+                                             const GeographyCoordinates& other_raw) {
+        if (other.type() != GeoShapeType::GEO_SHAPE_LINE_STRING) {
+            return false;
+        }
+        if ((name == "st_intersects" || name == "st_disjoint") &&
+            geography_has_polygon_intersection_witness(polygon_raw, polygon_index, other_raw,
+                                                       nodes)) {
+            return false;
+        }
+        return geography_polygon_has_rounded_side_mismatch(polygon_raw, polygon_index, other_raw,
+                                                            nodes);
+    };
+    const auto& lhs_index = name == "st_within" ? right : left;
+    const auto& rhs_index = name == "st_within" ? left : right;
+    const bool inverse_dimensional_containment =
+            containment && container.type() == GeoShapeType::GEO_SHAPE_LINE_STRING &&
+            value.type() == GeoShapeType::GEO_SHAPE_POLYGON;
+    if (name != "st_touches" && !inverse_dimensional_containment &&
+        ((lhs.type() == GeoShapeType::GEO_SHAPE_POLYGON &&
+         check_polygon_admission(nodes.left, lhs_index, rhs, nodes.right)) ||
+        (rhs.type() == GeoShapeType::GEO_SHAPE_POLYGON &&
+         check_polygon_admission(nodes.right, rhs_index, lhs, nodes.left)))) {
+        return Status::NotSupported(
+                "{} does not support ambiguous spherical Polygon boundary interiors", name);
+    }
     S2BooleanOperation::Options options;
     options.set_polygon_model(S2BooleanOperation::PolygonModel::CLOSED);
     options.set_polyline_model(S2BooleanOperation::PolylineModel::CLOSED);
@@ -1641,6 +1689,23 @@ bool geography_portable_bearing_for_test(StringRef from, StringRef to, double* b
 }
 #endif
 
+static double geography_raw_arc_distance(const GeoCoordinate& start, const GeoCoordinate& end) {
+    const auto [sin_half, cos_half] = geography_degree_sincos(end.x, -start.x, true);
+    const auto [sin_delta, cos_delta] = geography_degree_sincos(end.y, -start.y);
+    const auto [sin_sum, cos_sum] = geography_degree_sincos(end.y, start.y);
+    const GeographyFloat x = -sin_half * sin_sum;
+    const GeographyFloat y = cos_half * sin_delta;
+    const GeographyFloat z = geography_degree_sincos(start.y).second *
+                             geography_degree_sincos(end.y).second *
+                             geography_degree_sincos(end.x, -start.x).first;
+    const GeographyFloat dot = cos_delta * cos_half * cos_half - cos_sum * sin_half * sin_half;
+    using std::atan2;
+    using std::sqrt;
+    // Multiply before narrowing: a tiny angle can underflow double while its metres do not.
+    return static_cast<double>(atan2(sqrt(x * x + y * y + z * z), dot) *
+                               S2Earth::RadiusMeters());
+}
+
 double geography_distance(const GeoShape& left_shape, const GeoShape& right_shape,
                           StringRef left_wkb, StringRef right_wkb) {
     // Read original ordinates: 58 and 58.00000000000001 degrees can round to the same S2Point.
@@ -1649,21 +1714,8 @@ double geography_distance(const GeoShape& left_shape, const GeoShape& right_shap
         right_shape.type() == GeoShapeType::GEO_SHAPE_POINT) {
         const auto start = geography_point_coordinate(left_wkb);
         const auto end = geography_point_coordinate(right_wkb);
-        const auto [sin_half, cos_half] = geography_degree_sincos(end.first, -start.first, true);
-        const auto [sin_delta, cos_delta] = geography_degree_sincos(end.second, -start.second);
-        const auto [sin_sum, cos_sum] = geography_degree_sincos(end.second, start.second);
-        // The unrotated raw cross product changes only sign when operands are reversed.
-        const GeographyFloat x = -sin_half * sin_sum;
-        const GeographyFloat y = cos_half * sin_delta;
-        const GeographyFloat z = geography_degree_sincos(start.second).second *
-                                 geography_degree_sincos(end.second).second *
-                                 geography_degree_sincos(end.first, -start.first).first;
-        const GeographyFloat dot = cos_delta * cos_half * cos_half - cos_sum * sin_half * sin_half;
-        using std::atan2;
-        using std::sqrt;
-        // Multiply before narrowing: a tiny angle can underflow double while its metres do not.
-        return static_cast<double>(atan2(sqrt(x * x + y * y + z * z), dot) *
-                                   S2Earth::RadiusMeters());
+        return geography_raw_arc_distance({.x = start.first, .y = start.second},
+                                          {.x = end.first, .y = end.second});
     }
     const GeographyEdgeNodes nodes(left_wkb, right_wkb);
     MutableS2ShapeIndex left;
@@ -1676,17 +1728,46 @@ double geography_distance(const GeoShape& left_shape, const GeoShape& right_shap
     // LINESTRING(57 0,58 0) and (58+ulp 0,59 0) share only a rounded endpoint.
     // Require the existing Intersects certificate before accepting a zero as raw contact.
     // Coordinate indices are shared, while shape emission for the certificate can repeat.
-    if (distance == 0) {
+    const bool point_polygon =
+            (left_shape.type() == GeoShapeType::GEO_SHAPE_POINT &&
+             right_shape.type() == GeoShapeType::GEO_SHAPE_POLYGON) ||
+            (left_shape.type() == GeoShapeType::GEO_SHAPE_POLYGON &&
+             right_shape.type() == GeoShapeType::GEO_SHAPE_POINT);
+    const double conversion_error_meters =
+            S2Earth::ToMeters(geography_conversion_error().ToAngle());
+    if (distance == 0 || (point_polygon && distance <= conversion_error_meters)) {
         bool intersects = false;
-        THROW_IF_ERROR(geography_relation_impl("st_intersects", left_shape, right_shape, nodes,
-                                               &intersects));
-        if (!intersects) {
+        const auto status =
+                geography_relation_impl("st_intersects", left_shape, right_shape, nodes, &intersects);
+        if (!status.ok()) {
             throw Exception(
                     ErrorCode::NOT_IMPLEMENTED_ERROR,
                     "Geography distance does not support ambiguous spherical zero distance");
         }
+        if (!intersects) {
+            if (distance == 0) {
+                throw Exception(
+                        ErrorCode::NOT_IMPLEMENTED_ERROR,
+                        "Geography distance does not support ambiguous spherical zero distance");
+            }
+        }
+        if (intersects) {
+            return 0;
+        }
     }
     return distance;
+}
+
+double geography_length(StringRef wkb) {
+    GeographyCoordinates raw(wkb);
+    double length = 0;
+    for (const auto& sequence : raw.sequences) {
+        for (size_t i = 0; i + 1 < sequence.size(); ++i) {
+            length += geography_raw_arc_distance(sequence[i].coordinate,
+                                                 sequence[i + 1].coordinate);
+        }
+    }
+    return length;
 }
 
 double geography_area(const GeoShape& shape, StringRef wkb, bool square_meters) {

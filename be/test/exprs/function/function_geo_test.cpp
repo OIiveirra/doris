@@ -885,6 +885,20 @@ TEST(VGeoFunctionsTest, GeographyRejectsRoundedLinePolygonInteriors) {
     expect_geography_relation("st_within", boundary, polygon, false);
 }
 
+TEST(VGeoFunctionsTest, GeographyRejectsRoundedNonpointPolygonSideConversion) {
+    const std::string polygon = "POLYGON ((7 10,8 10,8 11,7 11,7 10))";
+    const std::string line =
+            "LINESTRING (6.999999999999999 10.25,6.999999999999999 10.250000000000002)";
+    expect_rounded_polygon_interior_error("st_contains", polygon, line);
+    expect_rounded_polygon_interior_error("st_within", line, polygon);
+    expect_geography_relation("st_contains", line, polygon, false);
+    expect_geography_relation("st_within", polygon, line, false);
+    for (const auto* name : {"st_intersects", "st_disjoint"}) {
+        expect_rounded_polygon_interior_error(name, polygon, line);
+        expect_rounded_polygon_interior_error(name, line, polygon);
+    }
+}
+
 TEST(VGeoFunctionsTest, GeographyRejectsRoundedPointPolygonOwnership) {
     const std::string polygon = "POLYGON ((58 0,57 -1,58 -1,58 0))";
     const std::string point = "POINT (58.00000000000001 0)";
@@ -1461,6 +1475,19 @@ TEST(VGeoFunctionsTest, GeographyLineAdmissionUsesOriginalNearAntipodalArc) {
         EXPECT_NEAR(length, reference_length, 1e-6);
         expect_geography_line_pole(line);
         expect_geography_relation("st_equals", line, lines[1], true);
+    }
+}
+
+TEST(VGeoFunctionsTest, GeographyLengthPreservesOriginalCoordinates) {
+    const std::vector<std::string> lines {
+            "LINESTRING (30 45,30.000000000000004 45)",
+            "LINESTRING (30.000000000000004 45,30 45)",
+            "LINESTRING (0 0,1e-160 0)",
+            "LINESTRING (1e-160 0,0 0)"};
+    for (const auto& line : lines) {
+        double length = 0;
+        geography_measurement("st_length", {line}, &length);
+        EXPECT_GT(length, 0);
     }
 }
 
@@ -2116,7 +2143,9 @@ TEST(VGeoFunctionsTest, GeographyPointShapeDistanceRejectsRoundedOnlyZero) {
             {"POINT (0 58.00000000000001)", "LINESTRING (0 57,0 58)"},
             {"POINT (0 58)", "LINESTRING (0 58.00000000000001,180 -58)"},
             {"POINT (58.00000000000001 0)", "POLYGON ((58 0,57 -1,58 -1,58 0))"},
-            {"POINT (6.999999999999999 10.25)", "POLYGON ((7 10,8 10,8 11,7 11,7 10))"}};
+            {"POINT (6.999999999999999 10.25)", "POLYGON ((7 10,8 10,8 11,7 11,7 10))"},
+            {"POINT (2.0000000000000004 10.02)",
+             "POLYGON ((2 10,3 10,3 11,2 11,2 10))"}};
     // S2 reports zero for an endpoint gap or a raw exterior point rounded onto/inside a polygon.
     // Both distance APIs must reject that unsupported zero rather than turn it into contact.
     for (const auto& [point, shape] : cases) {
