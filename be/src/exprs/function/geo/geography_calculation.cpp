@@ -1247,9 +1247,10 @@ static GeographyPolygonInterior geography_polygon_point_interior(
     return interior ? GeographyPolygonInterior::INSIDE : GeographyPolygonInterior::OUTSIDE;
 }
 
-static bool geography_polygon_has_rounded_side_mismatch(
-        const GeographyCoordinates& polygon, const S2ShapeIndex& polygon_index,
-        const GeographyCoordinates& other, const GeographyEdgeNodes& nodes) {
+static bool geography_polygon_has_rounded_side_mismatch(const GeographyCoordinates& polygon,
+                                                        const S2ShapeIndex& polygon_index,
+                                                        const GeographyCoordinates& other,
+                                                        const GeographyEdgeNodes& nodes) {
     for (const auto& sequence : other.sequences) {
         for (const auto& point : sequence) {
             // A raw boundary vertex is an actual contact, even if S2 rounds it onto a
@@ -1396,21 +1397,20 @@ static Status geography_relation_impl(std::string_view name, const GeoShape& lhs
                           raw_coverage ? &left_edges : nullptr);
     geography_shape_index(value, name == "st_within" ? nodes.left : nodes.right, nodes, &right,
                           raw_coverage ? &right_edges : nullptr);
-    const auto check_polygon_admission = [&](const GeographyCoordinates& polygon_raw,
-                                             const S2ShapeIndex& polygon_index,
-                                             const GeoShape& other,
-                                             const GeographyCoordinates& other_raw) {
-        if (other.type() != GeoShapeType::GEO_SHAPE_LINE_STRING) {
-            return false;
-        }
-        if ((name == "st_intersects" || name == "st_disjoint") &&
-            geography_has_polygon_intersection_witness(polygon_raw, polygon_index, other_raw,
-                                                       nodes)) {
-            return false;
-        }
-        return geography_polygon_has_rounded_side_mismatch(polygon_raw, polygon_index, other_raw,
-                                                            nodes);
-    };
+    const auto check_polygon_admission =
+            [&](const GeographyCoordinates& polygon_raw, const S2ShapeIndex& polygon_index,
+                const GeoShape& other, const GeographyCoordinates& other_raw) {
+                if (other.type() != GeoShapeType::GEO_SHAPE_LINE_STRING) {
+                    return false;
+                }
+                if ((name == "st_intersects" || name == "st_disjoint") &&
+                    geography_has_polygon_intersection_witness(polygon_raw, polygon_index,
+                                                               other_raw, nodes)) {
+                    return false;
+                }
+                return geography_polygon_has_rounded_side_mismatch(polygon_raw, polygon_index,
+                                                                   other_raw, nodes);
+            };
     const auto& lhs_index = name == "st_within" ? right : left;
     const auto& rhs_index = name == "st_within" ? left : right;
     const bool inverse_dimensional_containment =
@@ -1418,9 +1418,9 @@ static Status geography_relation_impl(std::string_view name, const GeoShape& lhs
             value.type() == GeoShapeType::GEO_SHAPE_POLYGON;
     if (name != "st_touches" && !inverse_dimensional_containment &&
         ((lhs.type() == GeoShapeType::GEO_SHAPE_POLYGON &&
-         check_polygon_admission(nodes.left, lhs_index, rhs, nodes.right)) ||
-        (rhs.type() == GeoShapeType::GEO_SHAPE_POLYGON &&
-         check_polygon_admission(nodes.right, rhs_index, lhs, nodes.left)))) {
+          check_polygon_admission(nodes.left, lhs_index, rhs, nodes.right)) ||
+         (rhs.type() == GeoShapeType::GEO_SHAPE_POLYGON &&
+          check_polygon_admission(nodes.right, rhs_index, lhs, nodes.left)))) {
         return Status::NotSupported(
                 "{} does not support ambiguous spherical Polygon boundary interiors", name);
     }
@@ -1702,8 +1702,7 @@ static double geography_raw_arc_distance(const GeoCoordinate& start, const GeoCo
     using std::atan2;
     using std::sqrt;
     // Multiply before narrowing: a tiny angle can underflow double while its metres do not.
-    return static_cast<double>(atan2(sqrt(x * x + y * y + z * z), dot) *
-                               S2Earth::RadiusMeters());
+    return static_cast<double>(atan2(sqrt(x * x + y * y + z * z), dot) * S2Earth::RadiusMeters());
 }
 
 double geography_distance(const GeoShape& left_shape, const GeoShape& right_shape,
@@ -1728,17 +1727,16 @@ double geography_distance(const GeoShape& left_shape, const GeoShape& right_shap
     // LINESTRING(57 0,58 0) and (58+ulp 0,59 0) share only a rounded endpoint.
     // Require the existing Intersects certificate before accepting a zero as raw contact.
     // Coordinate indices are shared, while shape emission for the certificate can repeat.
-    const bool point_polygon =
-            (left_shape.type() == GeoShapeType::GEO_SHAPE_POINT &&
-             right_shape.type() == GeoShapeType::GEO_SHAPE_POLYGON) ||
-            (left_shape.type() == GeoShapeType::GEO_SHAPE_POLYGON &&
-             right_shape.type() == GeoShapeType::GEO_SHAPE_POINT);
+    const bool point_polygon = (left_shape.type() == GeoShapeType::GEO_SHAPE_POINT &&
+                                right_shape.type() == GeoShapeType::GEO_SHAPE_POLYGON) ||
+                               (left_shape.type() == GeoShapeType::GEO_SHAPE_POLYGON &&
+                                right_shape.type() == GeoShapeType::GEO_SHAPE_POINT);
     const double conversion_error_meters =
             S2Earth::ToMeters(geography_conversion_error().ToAngle());
     if (distance == 0 || (point_polygon && distance <= conversion_error_meters)) {
         bool intersects = false;
-        const auto status =
-                geography_relation_impl("st_intersects", left_shape, right_shape, nodes, &intersects);
+        const auto status = geography_relation_impl("st_intersects", left_shape, right_shape, nodes,
+                                                    &intersects);
         if (!status.ok()) {
             throw Exception(
                     ErrorCode::NOT_IMPLEMENTED_ERROR,
@@ -1763,8 +1761,8 @@ double geography_length(StringRef wkb) {
     double length = 0;
     for (const auto& sequence : raw.sequences) {
         for (size_t i = 0; i + 1 < sequence.size(); ++i) {
-            length += geography_raw_arc_distance(sequence[i].coordinate,
-                                                 sequence[i + 1].coordinate);
+            length +=
+                    geography_raw_arc_distance(sequence[i].coordinate, sequence[i + 1].coordinate);
         }
     }
     return length;

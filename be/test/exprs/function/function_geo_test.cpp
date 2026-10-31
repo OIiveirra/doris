@@ -1479,11 +1479,9 @@ TEST(VGeoFunctionsTest, GeographyLineAdmissionUsesOriginalNearAntipodalArc) {
 }
 
 TEST(VGeoFunctionsTest, GeographyLengthPreservesOriginalCoordinates) {
-    const std::vector<std::string> lines {
-            "LINESTRING (30 45,30.000000000000004 45)",
-            "LINESTRING (30.000000000000004 45,30 45)",
-            "LINESTRING (0 0,1e-160 0)",
-            "LINESTRING (1e-160 0,0 0)"};
+    const std::vector<std::string> lines {"LINESTRING (30 45,30.000000000000004 45)",
+                                          "LINESTRING (30.000000000000004 45,30 45)",
+                                          "LINESTRING (0 0,1e-160 0)", "LINESTRING (1e-160 0,0 0)"};
     for (const auto& line : lines) {
         double length = 0;
         geography_measurement("st_length", {line}, &length);
@@ -2144,8 +2142,7 @@ TEST(VGeoFunctionsTest, GeographyPointShapeDistanceRejectsRoundedOnlyZero) {
             {"POINT (0 58)", "LINESTRING (0 58.00000000000001,180 -58)"},
             {"POINT (58.00000000000001 0)", "POLYGON ((58 0,57 -1,58 -1,58 0))"},
             {"POINT (6.999999999999999 10.25)", "POLYGON ((7 10,8 10,8 11,7 11,7 10))"},
-            {"POINT (2.0000000000000004 10.02)",
-             "POLYGON ((2 10,3 10,3 11,2 11,2 10))"}};
+            {"POINT (2.0000000000000004 10.02)", "POLYGON ((2 10,3 10,3 11,2 11,2 10))"}};
     // S2 reports zero for an endpoint gap or a raw exterior point rounded onto/inside a polygon.
     // Both distance APIs must reject that unsupported zero rather than turn it into contact.
     for (const auto& [point, shape] : cases) {

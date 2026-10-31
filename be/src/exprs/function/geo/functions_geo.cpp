@@ -1014,8 +1014,8 @@ struct StLength {
                 continue;
             }
 
-            double length = is_spatial_type(input_type) ? geography_length(shape_value)
-                                                         : shape->Length();
+            double length =
+                    is_spatial_type(input_type) ? geography_length(shape_value) : shape->Length();
             res->insert_value(length);
         }
 
